@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +40,26 @@ def health_check():
 # Book endpoints
 # -------------------------
 
+# Day 5: List books with pagination
+@app.get("/books", response_model=list[BookResponse])
+async def list_books(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Book)
+        .order_by(Book.id)
+        .offset(skip)
+        .limit(limit)
+    )
+
+    books = result.scalars().all()
+
+    return books
+
+
+# Day 4: Create book
 @app.post("/books", response_model=BookResponse)
 async def create_book(
     book: BookCreate,
@@ -66,6 +86,7 @@ async def create_book(
         )
 
 
+# Day 5: Get book by ID
 @app.get("/books/{book_id}", response_model=BookResponse)
 async def get_book(
     book_id: int,
@@ -166,6 +187,7 @@ async def create_lending(
         book_result = await db.execute(
             select(Book).where(Book.id == lending.book_id)
         )
+
         book = book_result.scalar_one_or_none()
 
         if book is None:
@@ -177,6 +199,7 @@ async def create_lending(
         member_result = await db.execute(
             select(Member).where(Member.id == lending.member_id)
         )
+
         member = member_result.scalar_one_or_none()
 
         if member is None:
