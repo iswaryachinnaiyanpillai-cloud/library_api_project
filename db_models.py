@@ -7,24 +7,53 @@ from database import Base
 class Book(Base):
     __tablename__ = "books"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    title: Mapped[str] = mapped_column(String, nullable=False)
-    author: Mapped[str] = mapped_column(String, nullable=False)
-    isbn: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
+    author: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
+    isbn: Mapped[str] = mapped_column(
+        String,
+        unique=True,
+        nullable=False,
+    )
 
 
 class Member(Base):
     __tablename__ = "members"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    name: Mapped[str] = mapped_column(String, nullable=False)
-    email: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
+    email: Mapped[str] = mapped_column(
+        String,
+        unique=True,
+        nullable=False,
+    )
 
 
 class Lending(Base):
     __tablename__ = "lendings"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
     book_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("books.id"),
@@ -35,4 +64,28 @@ class Lending(Base):
         ForeignKey("members.id"),
         nullable=False,
     )
-    returned: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    returned: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True,
+    )
+    email: Mapped[str] = mapped_column(
+        String,
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+    hashed_password: Mapped[str] = mapped_column(
+        String,
+        nullable=False,
+    )
