@@ -10,8 +10,10 @@ from auth import (
     verify_access_token,
     verify_password,
 )
+
 from database import AsyncSessionLocal
 from db_models import Book, Lending, Member, User
+
 from models import (
     BookCreate,
     BookResponse,
@@ -31,18 +33,18 @@ app = FastAPI(
 )
 
 
-# -------------------------
-# Database dependency
-# -------------------------
+# =========================================================
+# DATABASE DEPENDENCY
+# =========================================================
 
 async def get_db():
     async with AsyncSessionLocal() as session:
         yield session
 
 
-# -------------------------
-# Authentication dependency
-# -------------------------
+# =========================================================
+# AUTHENTICATION DEPENDENCY
+# =========================================================
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
@@ -68,9 +70,9 @@ async def get_current_user(
     return user
 
 
-# -------------------------
-# Health check
-# -------------------------
+# =========================================================
+# HEALTH CHECK
+# =========================================================
 
 @app.get("/health")
 def health_check():
@@ -83,9 +85,10 @@ def health_check():
 # AUTHENTICATION ENDPOINTS
 # =========================================================
 
-# -------------------------
+
+# ---------------------------------------------------------
 # Register
-# -------------------------
+# ---------------------------------------------------------
 
 @app.post(
     "/auth/register",
@@ -137,9 +140,9 @@ async def register_user(
     }
 
 
-# -------------------------
+# ---------------------------------------------------------
 # Login
-# -------------------------
+# ---------------------------------------------------------
 
 @app.post(
     "/auth/login",
@@ -151,6 +154,7 @@ async def login_user(
 ):
     # OAuth2PasswordRequestForm uses "username".
     # We use it to carry the user's email.
+
     result = await db.execute(
         select(User).where(
             User.email == form_data.username
@@ -194,9 +198,9 @@ async def login_user(
     }
 
 
-# -------------------------
+# ---------------------------------------------------------
 # Current logged-in user
-# -------------------------
+# ---------------------------------------------------------
 
 @app.get(
     "/auth/me",
@@ -215,9 +219,10 @@ async def get_current_user_info(
 # BOOK ENDPOINTS
 # =========================================================
 
-# -------------------------
-# List books
-# -------------------------
+
+# ---------------------------------------------------------
+# List books - ONLY CURRENT USER'S BOOKS
+# ---------------------------------------------------------
 
 @app.get(
     "/books",
@@ -231,6 +236,7 @@ async def list_books(
 ):
     result = await db.execute(
         select(Book)
+        .where(Book.owner_id == current_user.id)
         .order_by(Book.id)
         .offset(skip)
         .limit(limit)
@@ -241,9 +247,9 @@ async def list_books(
     return books
 
 
-# -------------------------
-# Create book
-# -------------------------
+# ---------------------------------------------------------
+# Create book - ASSIGN CURRENT USER AS OWNER
+# ---------------------------------------------------------
 
 @app.post(
     "/books",
@@ -259,6 +265,7 @@ async def create_book(
             title=book.title,
             author=book.author,
             isbn=book.isbn,
+            owner_id=current_user.id,
         )
 
         db.add(new_book)
@@ -277,9 +284,9 @@ async def create_book(
         )
 
 
-# -------------------------
-# Get book by ID
-# -------------------------
+# ---------------------------------------------------------
+# Get book by ID - OWNER ONLY
+# ---------------------------------------------------------
 
 @app.get(
     "/books/{book_id}",
@@ -297,15 +304,18 @@ async def get_book(
         )
 
     result = await db.execute(
-        select(Book).where(Book.id == book_id)
+        select(Book).where(
+            Book.id == book_id,
+            Book.owner_id == current_user.id,
+        )
     )
 
     book = result.scalar_one_or_none()
 
     if book is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Book not found",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to access this book",
         )
 
     return book
@@ -315,9 +325,10 @@ async def get_book(
 # MEMBER ENDPOINTS
 # =========================================================
 
-# -------------------------
-# Create member
-# -------------------------
+
+# ---------------------------------------------------------
+# Create member - ASSIGN CURRENT USER AS OWNER
+# ---------------------------------------------------------
 
 @app.post(
     "/members",
@@ -332,6 +343,7 @@ async def create_member(
         new_member = Member(
             name=member.name,
             email=member.email,
+            owner_id=current_user.id,
         )
 
         db.add(new_member)
@@ -350,9 +362,9 @@ async def create_member(
         )
 
 
-# -------------------------
-# Get member
-# -------------------------
+# ---------------------------------------------------------
+# Get member - OWNER ONLY
+# ---------------------------------------------------------
 
 @app.get(
     "/members/{member_id}",
@@ -370,15 +382,18 @@ async def get_member(
         )
 
     result = await db.execute(
-        select(Member).where(Member.id == member_id)
+        select(Member).where(
+            Member.id == member_id,
+            Member.owner_id == current_user.id,
+        )
     )
 
     member = result.scalar_one_or_none()
 
     if member is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Member not found",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to access this member",
         )
 
     return member
@@ -388,9 +403,10 @@ async def get_member(
 # LENDING ENDPOINTS
 # =========================================================
 
-# -------------------------
-# Create lending
-# -------------------------
+
+# ---------------------------------------------------------
+# Create lending - OWNER VALIDATION
+# ---------------------------------------------------------
 
 @app.post(
     "/lendings",
@@ -402,6 +418,8 @@ async def create_lending(
     current_user: User = Depends(get_current_user),
 ):
     try:
+
+        # Validate IDs
         if (
             lending.book_id <= 0
             or lending.member_id <= 0
@@ -414,10 +432,14 @@ async def create_lending(
                 ),
             )
 
-        # Check book
+        # -------------------------------------------------
+        # Check book belongs to current user
+        # -------------------------------------------------
+
         book_result = await db.execute(
             select(Book).where(
-                Book.id == lending.book_id
+                Book.id == lending.book_id,
+                Book.owner_id == current_user.id,
             )
         )
 
@@ -425,14 +447,18 @@ async def create_lending(
 
         if book is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Book not found",
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to use this book",
             )
 
-        # Check member
+        # -------------------------------------------------
+        # Check member belongs to current user
+        # -------------------------------------------------
+
         member_result = await db.execute(
             select(Member).where(
-                Member.id == lending.member_id
+                Member.id == lending.member_id,
+                Member.owner_id == current_user.id,
             )
         )
 
@@ -440,14 +466,19 @@ async def create_lending(
 
         if member is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Member not found",
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You are not authorized to use this member",
             )
+
+        # -------------------------------------------------
+        # Create lending with current user as owner
+        # -------------------------------------------------
 
         new_lending = Lending(
             book_id=lending.book_id,
             member_id=lending.member_id,
             returned=False,
+            owner_id=current_user.id,
         )
 
         db.add(new_lending)
@@ -470,9 +501,9 @@ async def create_lending(
         )
 
 
-# -------------------------
-# Get lending
-# -------------------------
+# ---------------------------------------------------------
+# Get lending - OWNER ONLY
+# ---------------------------------------------------------
 
 @app.get(
     "/lendings/{lending_id}",
@@ -491,7 +522,8 @@ async def get_lending(
 
     result = await db.execute(
         select(Lending).where(
-            Lending.id == lending_id
+            Lending.id == lending_id,
+            Lending.owner_id == current_user.id,
         )
     )
 
@@ -499,8 +531,8 @@ async def get_lending(
 
     if lending is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Lending not found",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not authorized to access this lending",
         )
 
     return lending
