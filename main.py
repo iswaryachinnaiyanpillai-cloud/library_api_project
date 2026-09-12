@@ -27,6 +27,10 @@ from models import (
 )
 
 
+# =========================================================
+# APP
+# =========================================================
+
 app = FastAPI(
     title="Library Book Lending API",
     version="1.0.0",
@@ -221,7 +225,7 @@ async def get_current_user_info(
 
 
 # ---------------------------------------------------------
-# List books - ONLY CURRENT USER'S BOOKS
+# List books - SEARCH, FILTERS AND PAGINATION
 # ---------------------------------------------------------
 
 @app.get(
@@ -229,21 +233,62 @@ async def get_current_user_info(
     response_model=list[BookResponse],
 )
 async def list_books(
+    title: str | None = Query(None),
+    author: str | None = Query(None),
+    isbn: str | None = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(Book)
-        .where(Book.owner_id == current_user.id)
+    # Start with the current user's books only.
+    # This keeps the Day 8 authorization/ownership rule.
+    query = select(Book).where(
+        Book.owner_id == current_user.id
+    )
+
+    # -----------------------------------------------------
+    # Search/filter by title
+    # -----------------------------------------------------
+    # ilike performs case-insensitive SQL filtering.
+    if title:
+        query = query.where(
+            Book.title.ilike(f"%{title}%")
+        )
+
+    # -----------------------------------------------------
+    # Search/filter by author
+    # -----------------------------------------------------
+    if author:
+        query = query.where(
+            Book.author.ilike(f"%{author}%")
+        )
+
+    # -----------------------------------------------------
+    # Search/filter by ISBN
+    # -----------------------------------------------------
+    if isbn:
+        query = query.where(
+            Book.isbn.ilike(f"%{isbn}%")
+        )
+
+    # -----------------------------------------------------
+    # Ordering + pagination
+    # -----------------------------------------------------
+    # Filtering happens first in SQL.
+    # Then offset/limit are applied to the filtered results.
+    query = (
+        query
         .order_by(Book.id)
         .offset(skip)
         .limit(limit)
     )
 
+    result = await db.execute(query)
+
     books = result.scalars().all()
 
+    # Empty result sets return [] automatically.
     return books
 
 
