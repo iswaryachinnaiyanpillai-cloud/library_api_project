@@ -1,7 +1,9 @@
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
 
 from auth import (
     create_access_token,
@@ -26,6 +28,11 @@ from models import (
     UserResponse,
 )
 
+from services.book_service import (
+    BookService,
+    BookServiceError,
+)
+
 
 # =========================================================
 # APP
@@ -35,6 +42,25 @@ app = FastAPI(
     title="Library Book Lending API",
     version="1.0.0",
 )
+
+
+# =========================================================
+# DAY 10 - SERVICE DEPENDENCY
+# =========================================================
+
+def get_book_service():
+    return BookService()
+
+
+# =========================================================
+# DAY 10 - EXTERNAL BOOK RESPONSE
+# =========================================================
+
+class ExternalBookResponse(BaseModel):
+    title: str
+    author: str | None = None
+    first_publish_year: int | None = None
+    isbn: str | None = None
 
 
 # =========================================================
@@ -103,7 +129,6 @@ async def register_user(
     user: UserCreate,
     db: AsyncSession = Depends(get_db),
 ):
-    # Check if email already exists
     result = await db.execute(
         select(User).where(User.email == user.email)
     )
@@ -116,7 +141,6 @@ async def register_user(
             detail="Email already registered",
         )
 
-    # Hash password
     hashed_password = hash_password(user.password)
 
     new_user = User(
@@ -130,8 +154,18 @@ async def register_user(
         await db.commit()
         await db.refresh(new_user)
 
-    except Exception:
+    except IntegrityError:
         await db.rollback()
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        )
+
+    except Exception as exc:
+        await db.rollback()
+
+        print("USER REGISTER ERROR:", repr(exc))
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -156,9 +190,6 @@ async def login_user(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: AsyncSession = Depends(get_db),
 ):
-    # OAuth2PasswordRequestForm uses "username".
-    # We use it to carry the user's email.
-
     result = await db.execute(
         select(User).where(
             User.email == form_data.username
@@ -176,7 +207,6 @@ async def login_user(
             },
         )
 
-    # Verify password
     if not verify_password(
         form_data.password,
         user.hashed_password,
@@ -189,7 +219,6 @@ async def login_user(
             },
         )
 
-    # Create JWT
     access_token = create_access_token(
         data={
             "sub": str(user.id),
@@ -220,13 +249,8 @@ async def get_current_user_info(
 
 
 # =========================================================
-# BOOK ENDPOINTS
+# DAY 9 - BOOK SEARCH, FILTERS AND PAGINATION
 # =========================================================
-
-
-# ---------------------------------------------------------
-# List books - SEARCH, FILTERS AND PAGINATION
-# ---------------------------------------------------------
 
 @app.get(
     "/books",
@@ -241,42 +265,31 @@ async def list_books(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Start with the current user's books only.
-    # This keeps the Day 8 authorization/ownership rule.
+    # Start with only the current user's books.
     query = select(Book).where(
         Book.owner_id == current_user.id
     )
 
-    # -----------------------------------------------------
-    # Search/filter by title
-    # -----------------------------------------------------
-    # ilike performs case-insensitive SQL filtering.
+    # Title filter
     if title:
         query = query.where(
             Book.title.ilike(f"%{title}%")
         )
 
-    # -----------------------------------------------------
-    # Search/filter by author
-    # -----------------------------------------------------
+    # Author filter
     if author:
         query = query.where(
             Book.author.ilike(f"%{author}%")
         )
 
-    # -----------------------------------------------------
-    # Search/filter by ISBN
-    # -----------------------------------------------------
+    # ISBN filter
     if isbn:
         query = query.where(
             Book.isbn.ilike(f"%{isbn}%")
         )
 
-    # -----------------------------------------------------
-    # Ordering + pagination
-    # -----------------------------------------------------
-    # Filtering happens first in SQL.
-    # Then offset/limit are applied to the filtered results.
+    # Filtering is performed in SQL first.
+    # Pagination is applied after filtering.
     query = (
         query
         .order_by(Book.id)
@@ -288,13 +301,39 @@ async def list_books(
 
     books = result.scalars().all()
 
-    # Empty result sets return [] automatically.
+    # Empty results return [].
     return books
 
 
-# ---------------------------------------------------------
-# Create book - ASSIGN CURRENT USER AS OWNER
-# ---------------------------------------------------------
+# =========================================================
+# DAY 10 - EXTERNAL BOOK SEARCH
+# =========================================================
+
+@app.get(
+    "/external-books",
+    response_model=list[ExternalBookResponse],
+)
+async def search_external_books(
+    query: str = Query(..., min_length=1),
+    limit: int = Query(10, ge=1, le=20),
+    service: BookService = Depends(get_book_service),
+):
+    try:
+        return await service.search_books(
+            query=query,
+            limit=limit,
+        )
+
+    except BookServiceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        )
+
+
+# =========================================================
+# BOOK CREATE
+# =========================================================
 
 @app.post(
     "/books",
@@ -320,18 +359,36 @@ async def create_book(
 
         return new_book
 
-    except Exception:
+    except HTTPException:
         await db.rollback()
+        raise
+
+    except IntegrityError as exc:
+        await db.rollback()
+
+        print("BOOK INTEGRITY ERROR:", repr(exc))
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unable to create book",
+            detail="A book with this ISBN already exists.",
+        )
+
+    except Exception as exc:
+        await db.rollback()
+
+        # Temporary diagnostic output so the actual
+        # database problem is visible during testing.
+        print("BOOK CREATE ERROR:", repr(exc))
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
         )
 
 
-# ---------------------------------------------------------
-# Get book by ID - OWNER ONLY
-# ---------------------------------------------------------
+# =========================================================
+# GET BOOK BY ID
+# =========================================================
 
 @app.get(
     "/books/{book_id}",
@@ -372,7 +429,7 @@ async def get_book(
 
 
 # ---------------------------------------------------------
-# Create member - ASSIGN CURRENT USER AS OWNER
+# Create member
 # ---------------------------------------------------------
 
 @app.post(
@@ -398,8 +455,20 @@ async def create_member(
 
         return new_member
 
-    except Exception:
+    except IntegrityError as exc:
         await db.rollback()
+
+        print("MEMBER INTEGRITY ERROR:", repr(exc))
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to create member because of a database constraint.",
+        )
+
+    except Exception as exc:
+        await db.rollback()
+
+        print("MEMBER CREATE ERROR:", repr(exc))
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -408,7 +477,7 @@ async def create_member(
 
 
 # ---------------------------------------------------------
-# Get member - OWNER ONLY
+# Get member
 # ---------------------------------------------------------
 
 @app.get(
@@ -450,7 +519,7 @@ async def get_member(
 
 
 # ---------------------------------------------------------
-# Create lending - OWNER VALIDATION
+# Create lending
 # ---------------------------------------------------------
 
 @app.post(
@@ -464,7 +533,6 @@ async def create_lending(
 ):
     try:
 
-        # Validate IDs
         if (
             lending.book_id <= 0
             or lending.member_id <= 0
@@ -477,10 +545,7 @@ async def create_lending(
                 ),
             )
 
-        # -------------------------------------------------
-        # Check book belongs to current user
-        # -------------------------------------------------
-
+        # Check book ownership
         book_result = await db.execute(
             select(Book).where(
                 Book.id == lending.book_id,
@@ -496,10 +561,7 @@ async def create_lending(
                 detail="You are not authorized to use this book",
             )
 
-        # -------------------------------------------------
-        # Check member belongs to current user
-        # -------------------------------------------------
-
+        # Check member ownership
         member_result = await db.execute(
             select(Member).where(
                 Member.id == lending.member_id,
@@ -514,10 +576,6 @@ async def create_lending(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You are not authorized to use this member",
             )
-
-        # -------------------------------------------------
-        # Create lending with current user as owner
-        # -------------------------------------------------
 
         new_lending = Lending(
             book_id=lending.book_id,
@@ -537,8 +595,20 @@ async def create_lending(
         await db.rollback()
         raise
 
-    except Exception:
+    except IntegrityError as exc:
         await db.rollback()
+
+        print("LENDING INTEGRITY ERROR:", repr(exc))
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to create lending because of a database constraint.",
+        )
+
+    except Exception as exc:
+        await db.rollback()
+
+        print("LENDING CREATE ERROR:", repr(exc))
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -547,7 +617,7 @@ async def create_lending(
 
 
 # ---------------------------------------------------------
-# Get lending - OWNER ONLY
+# Get lending
 # ---------------------------------------------------------
 
 @app.get(

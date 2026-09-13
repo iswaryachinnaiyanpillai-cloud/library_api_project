@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -6,29 +8,49 @@ from main import app
 
 @pytest.mark.asyncio
 async def test_user_cannot_access_another_users_book():
+
+    # -----------------------------------------------------
+    # Create unique test data for every test run
+    # -----------------------------------------------------
+
+    unique_id = uuid.uuid4().hex[:8]
+
+    user_a_email = f"testusera_{unique_id}@test.com"
+    user_b_email = f"testuserb_{unique_id}@test.com"
+
+    password_a = "TestUserA@123"
+    password_b = "TestUserB@123"
+
+    test_isbn = f"TEST-AUTH-{unique_id}"
+
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://test",
     ) as client:
 
-        # Register User A
+        # =================================================
+        # REGISTER USER A
+        # =================================================
+
         response = await client.post(
             "/auth/register",
             json={
-                "email": "testusera@test.com",
-                "password": "TestUserA@123",
+                "email": user_a_email,
+                "password": password_a,
             },
         )
 
-        # Ignore if user already exists
-        assert response.status_code in [201, 400]
+        assert response.status_code == 201
 
-        # Login User A
+        # =================================================
+        # LOGIN USER A
+        # =================================================
+
         response = await client.post(
             "/auth/login",
             data={
-                "username": "testusera@test.com",
-                "password": "TestUserA@123",
+                "username": user_a_email,
+                "password": password_a,
             },
         )
 
@@ -40,13 +62,16 @@ async def test_user_cannot_access_another_users_book():
             "Authorization": f"Bearer {token_a}"
         }
 
-        # Create a book as User A
+        # =================================================
+        # USER A CREATES A BOOK
+        # =================================================
+
         response = await client.post(
             "/books",
             json={
                 "title": "Authorization Test Book",
                 "author": "Test Author",
-                "isbn": "TEST-AUTH-001",
+                "isbn": test_isbn,
             },
             headers=headers_a,
         )
@@ -55,23 +80,29 @@ async def test_user_cannot_access_another_users_book():
 
         book_id = response.json()["id"]
 
-        # Register User B
+        # =================================================
+        # REGISTER USER B
+        # =================================================
+
         response = await client.post(
             "/auth/register",
             json={
-                "email": "testuserb@test.com",
-                "password": "TestUserB@123",
+                "email": user_b_email,
+                "password": password_b,
             },
         )
 
-        assert response.status_code in [201, 400]
+        assert response.status_code == 201
 
-        # Login User B
+        # =================================================
+        # LOGIN USER B
+        # =================================================
+
         response = await client.post(
             "/auth/login",
             data={
-                "username": "testuserb@test.com",
-                "password": "TestUserB@123",
+                "username": user_b_email,
+                "password": password_b,
             },
         )
 
@@ -83,14 +114,19 @@ async def test_user_cannot_access_another_users_book():
             "Authorization": f"Bearer {token_b}"
         }
 
-        # User B attempts to access User A's book
+        # =================================================
+        # USER B TRIES TO ACCESS USER A'S BOOK
+        # =================================================
+
         response = await client.get(
             f"/books/{book_id}",
             headers=headers_b,
         )
 
-        # Authorization must block access
+        # User B must NOT be allowed to access
+        # User A's book.
         assert response.status_code == 403
+
         assert response.json()["detail"] == (
             "You are not authorized to access this book"
         )
