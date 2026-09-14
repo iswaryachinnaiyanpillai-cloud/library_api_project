@@ -1,4 +1,14 @@
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+import logging
+
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+    status,
+)
+from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -14,7 +24,13 @@ from auth import (
 )
 
 from database import AsyncSessionLocal
-from db_models import Book, Lending, Member, User
+
+from db_models import (
+    Book,
+    Lending,
+    Member,
+    User,
+)
 
 from models import (
     BookCreate,
@@ -35,6 +51,23 @@ from services.book_service import (
 
 
 # =========================================================
+# LOGGING CONFIGURATION
+# =========================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format=(
+        "%(asctime)s | "
+        "%(levelname)s | "
+        "%(name)s | "
+        "%(message)s"
+    ),
+)
+
+logger = logging.getLogger("library_api")
+
+
+# =========================================================
 # APP
 # =========================================================
 
@@ -42,6 +75,31 @@ app = FastAPI(
     title="Library Book Lending API",
     version="1.0.0",
 )
+
+
+# =========================================================
+# GLOBAL UNEXPECTED ERROR HANDLER
+# =========================================================
+
+@app.exception_handler(Exception)
+async def unexpected_exception_handler(
+    request: Request,
+    exc: Exception,
+):
+    logger.exception(
+        "Unexpected application error",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+        },
+    )
+
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "detail": "Internal server error. Please try again later."
+        },
+    )
 
 
 # =========================================================
@@ -69,7 +127,20 @@ class ExternalBookResponse(BaseModel):
 
 async def get_db():
     async with AsyncSessionLocal() as session:
-        yield session
+        try:
+            yield session
+
+        except Exception:
+            await session.rollback()
+
+            logger.exception(
+                "Database session rolled back after unexpected error"
+            )
+
+            raise
+
+        finally:
+            await session.close()
 
 
 # =========================================================
@@ -154,8 +225,20 @@ async def register_user(
         await db.commit()
         await db.refresh(new_user)
 
+        logger.info(
+            "User registered successfully",
+            extra={
+                "user_id": new_user.id,
+                "email": new_user.email,
+            },
+        )
+
     except IntegrityError:
         await db.rollback()
+
+        logger.warning(
+            "User registration failed because email already exists"
+        )
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -165,12 +248,14 @@ async def register_user(
     except Exception as exc:
         await db.rollback()
 
-        print("USER REGISTER ERROR:", repr(exc))
+        logger.exception(
+            "Unexpected error during user registration"
+        )
 
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to register user",
-        )
+        ) from exc
 
     return {
         "id": new_user.id,
@@ -199,6 +284,10 @@ async def login_user(
     user = result.scalar_one_or_none()
 
     if user is None:
+        logger.warning(
+            "Login failed: invalid email"
+        )
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
@@ -211,6 +300,13 @@ async def login_user(
         form_data.password,
         user.hashed_password,
     ):
+        logger.warning(
+            "Login failed: invalid password",
+            extra={
+                "user_id": user.id,
+            },
+        )
+
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",
@@ -223,6 +319,13 @@ async def login_user(
         data={
             "sub": str(user.id),
         }
+    )
+
+    logger.info(
+        "User logged in successfully",
+        extra={
+            "user_id": user.id,
+        },
     )
 
     return {
@@ -265,31 +368,25 @@ async def list_books(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Start with only the current user's books.
     query = select(Book).where(
         Book.owner_id == current_user.id
     )
 
-    # Title filter
     if title:
         query = query.where(
             Book.title.ilike(f"%{title}%")
         )
 
-    # Author filter
     if author:
         query = query.where(
             Book.author.ilike(f"%{author}%")
         )
 
-    # ISBN filter
     if isbn:
         query = query.where(
             Book.isbn.ilike(f"%{isbn}%")
         )
 
-    # Filtering is performed in SQL first.
-    # Pagination is applied after filtering.
     query = (
         query
         .order_by(Book.id)
@@ -297,12 +394,35 @@ async def list_books(
         .limit(limit)
     )
 
-    result = await db.execute(query)
+    try:
+        result = await db.execute(query)
 
-    books = result.scalars().all()
+        books = result.scalars().all()
 
-    # Empty results return [].
-    return books
+        logger.info(
+            "Books listed successfully",
+            extra={
+                "user_id": current_user.id,
+                "skip": skip,
+                "limit": limit,
+                "result_count": len(books),
+            },
+        )
+
+        return books
+
+    except Exception as exc:
+        logger.exception(
+            "Unexpected error while listing books",
+            extra={
+                "user_id": current_user.id,
+            },
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to retrieve books",
+        ) from exc
 
 
 # =========================================================
@@ -319,16 +439,41 @@ async def search_external_books(
     service: BookService = Depends(get_book_service),
 ):
     try:
-        return await service.search_books(
+        books = await service.search_books(
             query=query,
             limit=limit,
         )
 
+        return books
+
     except BookServiceError as exc:
+        logger.warning(
+            "External book service failed",
+            extra={
+                "query": query,
+                "limit": limit,
+                "reason": str(exc),
+            },
+        )
+
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=str(exc),
+        ) from exc
+
+    except Exception as exc:
+        logger.exception(
+            "Unexpected external book service error",
+            extra={
+                "query": query,
+                "limit": limit,
+            },
         )
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="External book service is currently unavailable",
+        ) from exc
 
 
 # =========================================================
@@ -357,33 +502,46 @@ async def create_book(
         await db.commit()
         await db.refresh(new_book)
 
-        return new_book
+        logger.info(
+            "Book created successfully",
+            extra={
+                "user_id": current_user.id,
+                "book_id": new_book.id,
+            },
+        )
 
-    except HTTPException:
-        await db.rollback()
-        raise
+        return new_book
 
     except IntegrityError as exc:
         await db.rollback()
 
-        print("BOOK INTEGRITY ERROR:", repr(exc))
+        logger.warning(
+            "Book creation failed because of database constraint",
+            extra={
+                "user_id": current_user.id,
+                "isbn": book.isbn,
+            },
+        )
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="A book with this ISBN already exists.",
-        )
+        ) from exc
 
     except Exception as exc:
         await db.rollback()
 
-        # Temporary diagnostic output so the actual
-        # database problem is visible during testing.
-        print("BOOK CREATE ERROR:", repr(exc))
+        logger.exception(
+            "Unexpected error while creating book",
+            extra={
+                "user_id": current_user.id,
+            },
+        )
 
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        )
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to create book",
+        ) from exc
 
 
 # =========================================================
@@ -453,27 +611,45 @@ async def create_member(
         await db.commit()
         await db.refresh(new_member)
 
+        logger.info(
+            "Member created successfully",
+            extra={
+                "user_id": current_user.id,
+                "member_id": new_member.id,
+            },
+        )
+
         return new_member
 
     except IntegrityError as exc:
         await db.rollback()
 
-        print("MEMBER INTEGRITY ERROR:", repr(exc))
+        logger.warning(
+            "Member creation failed because of database constraint",
+            extra={
+                "user_id": current_user.id,
+            },
+        )
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unable to create member because of a database constraint.",
-        )
+        ) from exc
 
     except Exception as exc:
         await db.rollback()
 
-        print("MEMBER CREATE ERROR:", repr(exc))
+        logger.exception(
+            "Unexpected error while creating member",
+            extra={
+                "user_id": current_user.id,
+            },
+        )
 
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to create member",
-        )
+        ) from exc
 
 
 # ---------------------------------------------------------
@@ -532,7 +708,6 @@ async def create_lending(
     current_user: User = Depends(get_current_user),
 ):
     try:
-
         if (
             lending.book_id <= 0
             or lending.member_id <= 0
@@ -589,6 +764,16 @@ async def create_lending(
         await db.commit()
         await db.refresh(new_lending)
 
+        logger.info(
+            "Lending created successfully",
+            extra={
+                "user_id": current_user.id,
+                "lending_id": new_lending.id,
+                "book_id": lending.book_id,
+                "member_id": lending.member_id,
+            },
+        )
+
         return new_lending
 
     except HTTPException:
@@ -598,22 +783,36 @@ async def create_lending(
     except IntegrityError as exc:
         await db.rollback()
 
-        print("LENDING INTEGRITY ERROR:", repr(exc))
+        logger.warning(
+            "Lending creation failed because of database constraint",
+            extra={
+                "user_id": current_user.id,
+                "book_id": lending.book_id,
+                "member_id": lending.member_id,
+            },
+        )
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unable to create lending because of a database constraint.",
-        )
+        ) from exc
 
     except Exception as exc:
         await db.rollback()
 
-        print("LENDING CREATE ERROR:", repr(exc))
+        logger.exception(
+            "Unexpected error while creating lending",
+            extra={
+                "user_id": current_user.id,
+                "book_id": lending.book_id,
+                "member_id": lending.member_id,
+            },
+        )
 
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to create lending",
-        )
+        ) from exc
 
 
 # ---------------------------------------------------------

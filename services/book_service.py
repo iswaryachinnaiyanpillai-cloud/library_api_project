@@ -1,8 +1,14 @@
+import logging
+
 import httpx
+
+
+logger = logging.getLogger("library_api.book_service")
 
 
 class BookServiceError(Exception):
     """Raised when the external book service fails."""
+
     pass
 
 
@@ -27,11 +33,17 @@ class BookService:
             "limit": limit,
         }
 
+        logger.info(
+            "Calling external book service | "
+            "query=%s | limit=%s",
+            query,
+            limit,
+        )
+
         try:
             async with httpx.AsyncClient(
                 timeout=self.timeout
             ) as client:
-
                 response = await client.get(
                     self.BASE_URL,
                     params=params,
@@ -40,16 +52,36 @@ class BookService:
                 response.raise_for_status()
 
         except httpx.TimeoutException as exc:
+            logger.error(
+                "External book service timeout | "
+                "query=%s",
+                query,
+            )
+
             raise BookServiceError(
                 "External book service timed out"
             ) from exc
 
         except httpx.HTTPStatusError as exc:
+            logger.error(
+                "External book service HTTP error | "
+                "status=%s | query=%s",
+                exc.response.status_code,
+                query,
+            )
+
             raise BookServiceError(
                 "External book service returned an error"
             ) from exc
 
         except httpx.RequestError as exc:
+            logger.error(
+                "External book service connection error | "
+                "query=%s | error=%s",
+                query,
+                str(exc),
+            )
+
             raise BookServiceError(
                 "Unable to connect to external book service"
             ) from exc
@@ -58,6 +90,12 @@ class BookService:
             data = response.json()
 
         except ValueError as exc:
+            logger.error(
+                "External book service returned invalid JSON | "
+                "query=%s",
+                query,
+            )
+
             raise BookServiceError(
                 "External book service returned invalid data"
             ) from exc
@@ -65,9 +103,15 @@ class BookService:
         books = []
 
         for item in data.get("docs", []):
-            authors = item.get("author_name", [])
+            authors = item.get(
+                "author_name",
+                [],
+            )
 
-            isbn_list = item.get("isbn", [])
+            isbn_list = item.get(
+                "isbn",
+                [],
+            )
 
             books.append(
                 {
@@ -90,5 +134,12 @@ class BookService:
                     ),
                 }
             )
+
+        logger.info(
+            "External book service succeeded | "
+            "query=%s | results=%s",
+            query,
+            len(books),
+        )
 
         return books
