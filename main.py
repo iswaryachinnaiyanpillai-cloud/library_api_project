@@ -10,9 +10,11 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from pydantic import BaseModel
 
 from auth import (
@@ -73,7 +75,15 @@ logger = logging.getLogger("library_api")
 
 app = FastAPI(
     title="Library Book Lending API",
+    description=(
+        "A RESTful API for managing library books, members, "
+        "and lending records with authentication, authorization, "
+        "search, pagination, external book-service integration, "
+        "reliability handling, and automated testing."
+    ),
     version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 
 

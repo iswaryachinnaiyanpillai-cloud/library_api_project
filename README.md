@@ -1,66 +1,80 @@
 # Library Book Lending API
 
-A RESTful API built with FastAPI and Pydantic for managing books, members, and book lending.
+A RESTful Library Book Lending API built with **FastAPI**, **Pydantic**, **SQLAlchemy**, and **PostgreSQL**.
 
-## Project Overview
+The API provides authentication, book management, member management, lending workflows, authorization, search and filtering, pagination, external book-service integration, reliability handling, and automated tests.
 
-This project is part of the ZyoraByte Python Backend Internship.
-
-Day 1 focused on creating the FastAPI application and health-check endpoint.
-
-Day 2 focuses on API design, Pydantic request/response models, REST endpoints, relationships, and error handling.
+This project was developed as part of the **ZyoraByte Python Backend Internship**.
 
 ---
 
-## Entities
+## Features
 
-### 1. Book
-
-Represents a book available in the library.
-
-Fields:
-
-- `id` - Unique identifier for the book
-- `title` - Title of the book
-- `author` - Author of the book
-- `isbn` - ISBN number of the book
-
-### 2. Member
-
-Represents a library member.
-
-Fields:
-
-- `id` - Unique identifier for the member
-- `name` - Member's name
-- `email` - Member's email address
-
-### 3. Lending
-
-Represents a book borrowed by a member.
-
-Fields:
-
-- `id` - Unique identifier for the lending record
-- `book_id` - ID of the borrowed book
-- `member_id` - ID of the member who borrowed the book
-- `returned` - Indicates whether the book has been returned
+- User registration and authentication
+- JWT-based authentication
+- Protected API endpoints
+- User ownership and authorization
+- Book creation and retrieval
+- Book search, filtering, and pagination
+- Library member management
+- Book lending management
+- External book search using Open Library
+- Consistent error handling
+- Database transaction rollback
+- Structured application logging
+- Automated API tests
+- Isolated test database
+- Database migrations using Alembic
+- Interactive Swagger API documentation
 
 ---
 
-## Entity Relationship
+## Technology Stack
 
-A member can borrow a book.
+| Technology | Purpose |
+|---|---|
+| Python | Backend programming language |
+| FastAPI | REST API framework |
+| Pydantic | Request and response validation |
+| SQLAlchemy | Database ORM |
+| PostgreSQL | Application database |
+| Alembic | Database migrations |
+| JWT | Authentication |
+| OAuth2 | Login authentication flow |
+| HTTPX | External API requests |
+| Pytest | Automated testing |
+| SQLite | Isolated test database |
+| Open Library API | External book data |
+
+---
+
+# Project Structure
 
 ```text
-Member (1)
-    |
-    | borrows
-    |
-    v
-Lending
-    |
-    | refers to
-    |
-    v
-Book (1)
+library_api_project/
+│
+├── alembic/
+│   ├── versions/
+│   └── ...
+│
+├── services/
+│   ├── __init__.py
+│   └── book_service.py
+│
+├── venv/
+│
+├── auth.py
+├── database.py
+├── db_models.py
+├── main.py
+├── models.py
+│
+├── conftest.py
+├── test_authorization.py
+├── test_day12.py
+│
+├── alembic.ini
+├── requirements.txt
+├── .env
+├── .gitignore
+└── README.md
