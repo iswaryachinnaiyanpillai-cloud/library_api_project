@@ -182,14 +182,30 @@ async def get_current_user(
 
 
 # =========================================================
-# HEALTH CHECK
+# DAY 14 - HEALTH CHECK
 # =========================================================
 
 @app.get("/health")
-def health_check():
-    return {
-        "status": "healthy",
-    }
+async def health_check(
+    db: AsyncSession = Depends(get_db),
+):
+    try:
+        await db.execute(select(1))
+
+        return {
+            "status": "healthy",
+            "database": "healthy",
+        }
+
+    except Exception as exc:
+        logger.exception(
+            "Health check failed: database is unavailable"
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database is unavailable",
+        ) from exc
 
 
 # =========================================================
